@@ -43,11 +43,11 @@ def _extract_gt(answer_text: str) -> str:
 def correctness_reward(*, completions, answer, **kwargs) -> list[float]:
     """
     Check if model's answer matches ground truth. Rewards:
-    - 1.0: correct answer in <answer> tags (ideal)
-    - 0.5: correct answer found anywhere in text (right math, wrong format)
-    - 0.0: wrong answer or no answer found
+    1.0: correct answer in <answer> tags (ideal)
+    0.5: correct answer found anywhere in text (right math, wrong format)
+    0.0: wrong answer or no answer found
 
-    The 0.5 intermediate reward is critical for early training — it gives the model
+    The 0.5 intermediate reward helps for early training, gives the model
     a gradient signal even before it learns the XML format.
     """
     rewards = []
@@ -95,8 +95,8 @@ def int_reward(*, completions, **kwargs) -> list[float]:
     Check if the content inside <answer> tags is a valid integer/number.
     Returns 1.0 if it's a valid number, 0.0 otherwise.
 
-    This provides gradient signal even when the answer is wrong but the model
-    learned to output a number in the right place — rewarding partial progress
+    Provides gradient signal even when the answer is wrong but the model
+    learned to output a number in the right place, to reward partial progress
     toward the correct format.
     """
     rewards = []

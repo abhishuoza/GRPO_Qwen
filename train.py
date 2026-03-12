@@ -1,22 +1,5 @@
 """
 GRPO training script for Qwen2.5-1.5B-Instruct on GSM8K.
-
-This trains a small language model to do math reasoning using Group Relative
-Policy Optimization (GRPO) — the same RL algorithm behind DeepSeek-R1, but
-at small scale with QLoRA for memory efficiency.
-
-How GRPO works:
-1. For each math problem, generate a group of completions (num_generations=4)
-2. Score each completion with reward functions (correctness + format)
-3. Compute advantage within the group (subtract mean, divide by std)
-4. Update policy to increase probability of above-average completions
-5. KL penalty (beta) prevents the model from drifting too far from its starting point
-
-No reward model needed — rewards are rule-based (did it get the right answer?).
-
-Usage:
-    python train.py
-    python train.py --config path/to/config.yaml
 """
 
 import argparse
