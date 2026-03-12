@@ -1,0 +1,57 @@
+# Smoke test config — 20 steps to verify training pipeline works
+# Usage: python train.py --config config_smoke.yaml
+
+# Model
+model_name: "Qwen/Qwen2.5-1.5B-Instruct"
+fallback_model_name: "Qwen/Qwen2.5-0.5B-Instruct"
+
+# QLoRA
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+
+# Quantization
+load_in_4bit: true
+bnb_4bit_compute_dtype: "bfloat16"
+bnb_4bit_quant_type: "nf4"
+
+# Training — short run
+max_steps: 20
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 2
+learning_rate: 5.0e-6
+max_completion_length: 384
+max_prompt_length: 256
+num_generations: 4
+beta: 0.01
+fp16: false
+bf16: true
+gradient_checkpointing: true
+optim: "paged_adamw_8bit"
+use_vllm: false
+logging_steps: 1
+save_steps: 100
+max_grad_norm: 0.1
+warmup_ratio: 0.1
+weight_decay: 0.1
+lr_scheduler_type: "cosine"
+
+# Reward weights
+correctness_reward_weight: 2.0
+format_reward_weight: 0.5
+int_reward_weight: 0.5
+
+# Dataset
+dataset_name: "openai/gsm8k"
+dataset_config: "main"
+
+# Output
+output_dir: "./grpo-qwen-smoke"
+
+# System prompt
+system_prompt: "You are a math assistant. Solve the problem step by step inside <reasoning> tags, then give your final numerical answer inside <answer> tags."
