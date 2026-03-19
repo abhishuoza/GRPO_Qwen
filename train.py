@@ -49,34 +49,35 @@ def prepare_dataset(config: dict):
 
 def load_model_and_tokenizer(config: dict):
     """
-    Load model in 4-bit with BitsAndBytesConfig.
-    Falls back to smaller model if OOM.
+    Load model. Uses 4-bit quantization if load_in_4bit is true (for single-GPU),
+    otherwise loads in bf16 (for multi-GPU DDP — quantized models can't be wrapped by DDP).
     """
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type=config["bnb_4bit_quant_type"],
-        bnb_4bit_compute_dtype=getattr(torch, config["bnb_4bit_compute_dtype"]),
+    model_name = config["model_name"]
+    use_4bit = config.get("load_in_4bit", True)
+
+    load_kwargs = dict(
+        dtype=torch.bfloat16,
+        attn_implementation="eager",
     )
 
-    model_name = config["model_name"]
-    try:
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            quantization_config=bnb_config,
-            dtype=torch.bfloat16,
-            device_map="auto",
-            attn_implementation="eager",  # safer with 4-bit than flash_attention
+    if use_4bit:
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type=config["bnb_4bit_quant_type"],
+            bnb_4bit_compute_dtype=getattr(torch, config["bnb_4bit_compute_dtype"]),
         )
+        load_kwargs["quantization_config"] = bnb_config
+        load_kwargs["device_map"] = "auto"
+        print("Loading in 4-bit (QLoRA mode)")
+    else:
+        print("Loading in bf16 (LoRA mode, multi-GPU compatible)")
+
+    try:
+        model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
     except torch.cuda.OutOfMemoryError:
         print(f"OOM loading {model_name}, falling back to {config['fallback_model_name']}")
         model_name = config["fallback_model_name"]
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            quantization_config=bnb_config,
-            dtype=torch.bfloat16,
-            device_map="auto",
-            attn_implementation="eager",
-        )
+        model = AutoModelForCausalLM.from_pretrained(model_name, **load_kwargs)
 
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     tokenizer.pad_token = tokenizer.eos_token
@@ -103,7 +104,7 @@ def main():
     # 2. Model + tokenizer
     print(f"Loading model: {config['model_name']}...")
     model, tokenizer, model_name = load_model_and_tokenizer(config)
-    print(f"Loaded {model_name} in 4-bit")
+    print(f"Loaded {model_name}")
 
     # 3. LoRA config — passed to GRPOTrainer, not applied manually
     peft_config = LoraConfig(
@@ -139,6 +140,8 @@ def main():
         logging_dir=f"{config['output_dir']}/logs",
         report_to="none",
         use_vllm=config.get("use_vllm", False),
+        vllm_mode=config.get("vllm_mode", "colocate"),
+        use_liger_kernel=config.get("use_liger_kernel", False),
         generation_batch_size=config.get("generation_batch_size", config["num_generations"]),
         reward_weights=[
             config["correctness_reward_weight"],
@@ -165,7 +168,12 @@ def main():
     print(f"  KL penalty (beta): {config['beta']}")
     print(f"  Reward weights: correctness={config['correctness_reward_weight']}, format={config['format_reward_weight']}, int={config['int_reward_weight']}")
 
-    trainer.train(resume_from_checkpoint=True)
+    # Resume from checkpoint if one exists (e.g. interrupted SLURM job), otherwise start fresh
+    import os
+    has_checkpoint = os.path.isdir(config["output_dir"]) and any(
+        d.startswith("checkpoint-") for d in os.listdir(config["output_dir"])
+    )
+    trainer.train(resume_from_checkpoint=has_checkpoint)
 
     # 7. Save
     print(f"Saving to {config['output_dir']}...")

@@ -1,20 +1,20 @@
 # GRPO Math Reasoning: Training Qwen2.5-1.5B-Instruct with Reinforcement Learning
 
-Training a small language model to improve at math reasoning using Group Relative Policy Optimization (GRPO), the RL technique behind DeepSeek-R1, applied at small scale with QLoRA on a single consumer GPU.
+Training a small language model to improve at math reasoning using Group Relative Policy Optimization (GRPO), the RL technique behind DeepSeek-R1, applied at small scale with LoRA on 8 RTX A4000 GPUs (4 for vLLM generation, 4 for DDP training).
 
 GRPO is a reinforcement learning algorithm for language models that doesn't need a reward model. For each prompt, it generates a group of completions, scores them with rule-based rewards, and computes advantage relative to the group mean. The policy is updated to make above-average completions more likely, with a KL penalty to prevent catastrophic drift from the base model.
 
 ## Results
 
-Evaluated on 200 GSM8K test examples. "Strict" counts only answers inside `<answer>` tags; "Lenient" falls back to the last number in the output.
+Evaluated on the full GSM8K test set (1,319 examples). "Strict" counts only answers inside `<answer>` tags; "Lenient" falls back to the last number in the output.
 
 | Model | Strict Accuracy | Lenient Accuracy |
 |---|---|---|
-| Qwen2.5-1.5B-Instruct (baseline) | 2.0% | 38.5% |
-| + GRPO (ours) | **38.5%** | **41.0%** |
-| **Delta** | **+36.5 pts** | **+2.5 pts** |
+| Qwen2.5-1.5B-Instruct (baseline) | 1.7% | 38.3% |
+| + GRPO (ours) | **48.7%** | **55.0%** |
+| **Delta** | **+47.0 pts** | **+16.7 pts** |
 
-The baseline model can solve math problems but doesn't use the `<answer>` tag format — hence the massive gap between its strict (2%) and lenient (38.5%) scores. After GRPO training, the model almost always outputs the trained `<reasoning>...</reasoning><answer>...</answer>` XML structure, closing that gap entirely. Underlying math accuracy also improved modestly (+2.5 pts).
+The baseline model can solve math problems but doesn't use the `<answer>` tag format, hence the massive gap between its strict (1.7%) and lenient (38.3%) scores. After GRPO training, the model consistently outputs the trained `<reasoning>...</reasoning><answer>...</answer>` XML structure (strict/lenient gap narrowed from 36.6 pts to 6.3 pts). Math reasoning accuracy improved significantly (+16.7 pts lenient).
 
 **Example output (trained model)**
 ```
@@ -28,22 +28,19 @@ for $2, so she makes 9 * $2 = $18.
 ```
 **Takeaway**
 
-GRPO rapidly teaches the model to follow a structured output format. This is the most visible effect of RL fine-tuning so far. Longer training on answer correctness should yield results Single consumer GPU seems viable. The training + eval runs on an RTX 4060 (8GB) using QLoRA + gradient checkpointing + paged optimizer.
-
-Need to see if tuning rewards better (lesser reward on formatting and more on correctness) allows training on consumer gpu, but good signs so far.
-Will train on for longer and on better hardware to see the effect properly.
+GRPO rapidly teaches the model to follow a structured output format and improves math reasoning. Scaling from a single consumer GPU (2k examples, 1 epoch, +2.5 pts) to a multi-GPU cluster with vLLM (7.5k examples, 2 epochs, 8 generations per prompt) yielded +16.7 pts on lenient accuracy.
 ## Setup
 
 | Component           | Details |
 |---------------------|---|
-| **Model**           | Qwen2.5-1.5B-Instruct, 4-bit QLoRA (rank 16, alpha 32) |
+| **Model**           | Qwen2.5-1.5B-Instruct, LoRA (rank 16, alpha 32) |
 | **Algorithm**       | GRPO via TRL's GRPOTrainer |
-| **Dataset**         | GSM8K train split (2,000 examples, shuffled subset) |
+| **Dataset**         | GSM8K train split (7,473 examples, 2 epochs) |
 | **Rewards**         | Correctness (weight 2.0): exact match or partial credit for last-number fallback. Format (weight 0.5): `<reasoning>/<answer>` XML tags. Integer check (weight 0.5): valid number inside `<answer>` tags. |
 | **KL penalty**      | beta=0.01 prevents drift from the instruct model |
 | **Optimizer**       | PagedAdamW 8-bit, cosine LR schedule, warmup 10%, weight decay 0.1 |
-| **Effective batch** | 1 x 4 generations x 4 accumulation = 16 |
-| **Hardware**        | NVIDIA RTX 4060 (8GB VRAM) |
+| **Effective batch** | 2 x 8 generations x 4 accumulation = 64 |
+| **Hardware**        | 8x NVIDIA RTX A4000 (16GB) -- 4 for vLLM generation, 4 for DDP training |
 
 **Install dependencies:**
 ```bash
@@ -52,16 +49,30 @@ pip install -r requirements.txt
 
 ## Usage
 
-**Evaluate baseline (before training), train with GRPO, evaluate after training:**
+**Evaluate:**
 ```bash
-python eval.py --num_samples 200 --lenient       # lenient extraction
-python eval.py --num_samples 200                  # strict (answer tags only)
+python eval.py --lenient                          # baseline lenient (full test set)
+python eval.py                                    # baseline strict
+python eval.py --checkpoint ./grpo-qwen-gsm8k --lenient
+python eval.py --checkpoint ./grpo-qwen-gsm8k
+```
 
-python train.py                                   # full run (~7-8 hours on RTX 4060)
+**Train (single GPU):**
+```bash
 python train.py --config config_smoke.yaml        # 20-step smoke test
-=
-python eval.py --checkpoint ./grpo-qwen-gsm8k --num_samples 200 --lenient
-python eval.py --checkpoint ./grpo-qwen-gsm8k --num_samples 200
+python train.py                                   # full run
+```
+
+**Train (multi-GPU with vLLM):**
+
+GRPO's bottleneck is autoregressive generation, not training. Using [vLLM as a separate generation server](https://huggingface.co/docs/trl/main/en/speeding_up_training#vllm-for-fast-generation-in-online-methods) on dedicated GPUs dramatically speeds this up. Set `use_vllm: true` and `vllm_mode: "server"` in the config, then split GPUs between generation and training:
+
+```bash
+# Terminal 1: vLLM server on GPUs 0-3
+CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen2.5-1.5B-Instruct
+
+# Terminal 2: DDP training on GPUs 4-7
+CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch --num_processes=4 train.py
 ```
 
 ## Project Structure

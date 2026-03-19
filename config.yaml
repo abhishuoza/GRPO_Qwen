@@ -1,5 +1,5 @@
-# GRPO + QLoRA Training Config for Qwen2.5-1.5B-Instruct on GSM8K
-# All hyperparameters in one place. Both train.py and eval.py read from this.
+# GRPO + QLoRA Config tuned for iLab GPU nodes (A5000 24GB / A4000 16GB)
+# Changes from local config marked with # CHANGED
 
 # Model
 model_name: "Qwen/Qwen2.5-1.5B-Instruct"
@@ -15,25 +15,28 @@ target_modules:
   - v_proj
   - o_proj
 
-# Quantization
-load_in_4bit: true
+# Quantization disabled for multi-GPU DDP (4-bit can't be wrapped by DDP)
+# 1.5B model in bf16 is only ~3GB, fits easily on 16GB A4000s
+load_in_4bit: false
 bnb_4bit_compute_dtype: "bfloat16"
 bnb_4bit_quant_type: "nf4"
 
 # Training
-num_train_epochs: 1
-per_device_train_batch_size: 1
+num_train_epochs: 2
+per_device_train_batch_size: 2
 gradient_accumulation_steps: 4
 learning_rate: 5.0e-6
-max_completion_length: 384
+max_completion_length: 512
 max_prompt_length: 256
-num_generations: 4
+num_generations: 8
 beta: 0.01
 fp16: false
 bf16: true
 gradient_checkpointing: true
 optim: "paged_adamw_8bit"
-use_vllm: false
+use_vllm: true
+vllm_mode: "server"
+use_liger_kernel: true
 logging_steps: 10
 save_steps: 200
 max_grad_norm: 0.1
@@ -41,18 +44,18 @@ warmup_ratio: 0.1
 weight_decay: 0.1
 lr_scheduler_type: "cosine"
 
-# Reward weights
+# Reward weights (unchanged — format reward becomes ~zero gradient once learned)
 correctness_reward_weight: 2.0
 format_reward_weight: 0.5
 int_reward_weight: 0.5
 
-# Dataset
+# Dataset — full GSM8K train split (7473 examples)
 dataset_name: "openai/gsm8k"
 dataset_config: "main"
-max_train_samples: 2000
+# No max_train_samples — use all 7473 examples   # CHANGED: was 2000
 
 # Output
 output_dir: "./grpo-qwen-gsm8k"
 
-# System prompt — tells the model what format to use
+# System prompt
 system_prompt: "You are a math assistant. Solve the problem step by step inside <reasoning> tags, then give your final numerical answer inside <answer> tags."

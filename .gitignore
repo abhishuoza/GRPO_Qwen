@@ -1,0 +1,7 @@
+.idea/
+__pycache__/
+grpo-qwen-gsm8k/
+slurm_*.out
+slurm_*.err
+*.slurm
+eval_*.txt
